@@ -1,5 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <rect width="108" height="108" rx="22" fill="#276e6c"/>
-  <circle cx="54" cy="54" r="27" fill="none" stroke="#f5f6f7" stroke-width="5"/>
-  <path d="M42 54h24M54 42v24" fill="none" stroke="#f5f6f7" stroke-width="5" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" fill="#f5f6f7" stroke="#f5f6f7">
+  <rect width="108" height="108" rx="22" fill="#276e6c" stroke="none"/>
+  <g id="wheelsoul-mark">
+    <circle cx="54" cy="54" r="24" fill="none" stroke-width="5.5"/>
+    <path d="M12 63 51 49 96 45 57 59Z" stroke="none"/>
+  </g>
 </svg>

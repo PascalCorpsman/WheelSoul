@@ -11,8 +11,36 @@ const FIELDS = {
   firmware: '311', current: '312', batteryTemperature: '315', voltage: '316',
   hardware: '318', lifetime: '319', cell: '31b',
 } as const
+export const EXTRA_FIELDS = {
+  boardSerial: ['301', 1, 0],
+  lowBattery5Raw: ['304', 1, 0],
+  lowBattery20Raw: ['305', 1, 0],
+  batterySerial: ['306', 1, 0],
+  pitch: ['307', -.1, 180],
+  roll: ['308', -.1, 180],
+  yaw: ['309', -.1, 180],
+  lightModeRaw: ['30c', 1, 0],
+  frontLightRaw: ['30d', 1, 0],
+  rearLightRaw: ['30e', 1, 0],
+  statusFlagsRaw: ['30f', 1, 0],
+  tripAmpHours: ['313', .00018, 0],
+  regenAmpHours: ['314', .00018, 0],
+  headroomRaw: ['317', 1, 0],
+  lifetimeAmpHoursRaw: ['31a', 1, 0],
+  lastErrorRaw: ['31c', 1, 0],
+  unknown1Raw: ['31d', 1, 0],
+  unknown2Raw: ['31e', 1, 0],
+  unknown3Raw: ['31f', 1, 0],
+  unknown4Raw: ['320', 1, 0],
+} as const
+type ExtraField = keyof typeof EXTRA_FIELDS
+function isExtraField(name: string): name is ExtraField {
+  return Object.prototype.hasOwnProperty.call(EXTRA_FIELDS, name)
+}
+const EXTRA_NAMES = Object.keys(EXTRA_FIELDS).filter(isExtraField)
+function isAngle(name: ExtraField): boolean { return name === 'pitch' || name === 'roll' || name === 'yaw' }
 const MODES: Record<number, string> = { 4: 'Sequoia', 5: 'Cruz', 6: 'Mission', 7: 'Elevated', 8: 'Delirium', 9: 'Custom' }
-type FieldName = keyof typeof FIELDS
+type FieldName = keyof typeof FIELDS | ExtraField
 export type Permission = 'read' | 'write' | 'notify'
 export interface BleIo {
   has(uuid: string, permission: Permission): boolean
@@ -23,7 +51,10 @@ export interface BleIo {
 }
 export interface Identity { hardware: number; firmware: number }
 
-export function fieldUuid(name: FieldName) { return `e659f${FIELDS[name]}-ea98-11e3-ac10-0800200c9a66` }
+export function fieldUuid(name: FieldName) {
+  const suffix = isExtraField(name) ? EXTRA_FIELDS[name][0] : FIELDS[name]
+  return `e659f${suffix}-ea98-11e3-ac10-0800200c9a66`
+}
 export function word(data: Uint8Array, signed = false): number {
   if (data.length !== 2) throw new Error(`Expected two bytes; received ${data.length}.`)
   const value = data[0] * 256 + data[1]
@@ -90,6 +121,8 @@ export class Session {
   private signal: AbortSignal
   private cells = new CellSamples()
   private warnings = new Set<string>()
+  private extraValues: Partial<Record<ExtraField, number | null>> = {}
+  private extraUpdated: number | null = null
 
   constructor(io: BleIo, identity: Identity, signal: AbortSignal) {
     validateIdentity(identity)
@@ -110,8 +143,26 @@ export class Session {
     }
     const value = await this.io.read(uuid)
     assertActive(this.signal)
-    word(value)
+    if (!isExtraField(name)) word(value)
     return value
+  }
+  private async readExtra(name: ExtraField): Promise<number | null> {
+    const data = await this.read(name, true)
+    if (data === null) return null
+    if (data.length !== 2) {
+      this.warnOnce(`length:${name}`, `Optional telemetry ${name} has ${data.length} bytes, not two; showing unavailable.`)
+      return null
+    }
+    const encoded = word(data)
+    if (isAngle(name) && encoded > 3600) throw new Error(`Invalid ${name} encoding: ${encoded}; expected 0-3600.`)
+    const [, scale, offset] = EXTRA_FIELDS[name]
+    return Number((encoded * scale + offset).toFixed(5))
+  }
+  private async refreshExtras() {
+    const values: Partial<Record<ExtraField, number | null>> = {}
+    for (const name of EXTRA_NAMES) if (!isAngle(name)) values[name] = await this.readExtra(name)
+    this.extraValues = values
+    this.extraUpdated = performance.now()
   }
   private async number(name: FieldName, signed = false): Promise<number> {
     const value = await this.read(name)
@@ -176,7 +227,13 @@ export class Session {
     const batteryTemperature = await this.read('batteryTemperature', true)
     const motorTemperature = temperature && temperature[1] !== 0 ? temperature[1] : null
     if (temperature?.[1] === 0) this.warnOnce('motor', 'Legacy XR reports zero motor temperature; treating it as unavailable.')
+    const additional: Partial<Record<ExtraField, number | null>> = {
+      pitch: await this.readExtra('pitch'), roll: await this.readExtra('roll'), yaw: await this.readExtra('yaw'),
+    }
+    const fresh = this.extraUpdated !== null && performance.now() - this.extraUpdated <= CELL_MAX_AGE
+    for (const name of EXTRA_NAMES) if (!isAngle(name)) additional[name] = fresh ? this.extraValues[name] ?? null : null
     return {
+      ...additional,
       ...this.identity, source: 'physical', timestamp: Date.now(), batteryPercent,
       packVoltage: Number(voltage.toFixed(2)), current: Number((current * .002).toFixed(3)),
       speed: Number((Math.abs(rpm) * .91766 * 60 / 1000).toFixed(3)),
@@ -184,6 +241,7 @@ export class Session {
       mode: MODES[mode] ?? `Unknown (${mode})`, cellVoltages: this.cells.values(performance.now()),
       controllerTemperature: temperature === null ? null : temperature[0], motorTemperature,
       batteryTemperature: batteryTemperature === null ? null : batteryTemperature[1],
+      rpm, tripRotations: trip, lifetimeMiles: lifetime, modeCode: mode,
     }
   }
   async stream(emit: (data: Telemetry & Identity) => void, abort: AbortController) {
@@ -201,7 +259,10 @@ export class Session {
     const keepalive = async () => {
       while (true) { await pause(10000, this.signal); await this.touch() }
     }
-    const workers = [pollCells(), pollFrames(), keepalive()]
+    const pollExtras = async () => {
+      while (true) { await this.refreshExtras(); await pause(1000, this.signal) }
+    }
+    const workers = [pollCells(), pollFrames(), keepalive(), pollExtras()]
     try { await Promise.all(workers) }
     finally { abort.abort(); await Promise.allSettled(workers) }
   }

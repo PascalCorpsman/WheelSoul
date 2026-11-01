@@ -5,6 +5,13 @@ Capacitor. `native/` implements the legacy XR protocol in TypeScript; the
 Capacitor BLE plugin performs GATT operations directly on the phone. No PC,
 Python server, official app, account, or Internet connection is needed at runtime.
 
+## Branding
+
+`branding/icon.svg` defines the closed-wheel / tapered-board mark, also used by the
+browser header and favicon. Android launcher PNGs are derived from that geometry;
+the adaptive foreground is inset to keep the board tips within the safe area.
+Changing these sources does not update an already installed APK.
+
 ## Build a debug APK on Linux
 
 Requirements:
@@ -44,8 +51,8 @@ which loses local app data. Keystores and APKs are Git-ignored. Do not upload th
 key alongside the APK.
 
 The dashboard, Android version name, and APK filename use `displayVersion` in the
-root `package.json` (currently `0.01`). Its npm `version` remains a valid semantic
-version (`0.0.1`). For future downloads, increase `versionCode` in
+root `package.json` (currently `0.02`). Its npm `version` remains a valid semantic
+version (`0.0.2`). For future downloads, increase `versionCode` in
 `android/app/build.gradle` and update both version fields. Upload the debug APK to a GitHub
 Release; no app store or release build is required.
 
@@ -57,7 +64,7 @@ enable USB debugging, connect the phone, confirm its USB authorization prompt, t
 
 ```sh
 "$ANDROID_HOME/platform-tools/adb" devices
-"$ANDROID_HOME/platform-tools/adb" install -r dist_android/WheelSoul-0.01-debug.apk
+"$ANDROID_HOME/platform-tools/adb" install -r dist_android/WheelSoul-0.02-debug.apk
 ```
 
 The app starts in demo mode. Disable Demo, turn on Bluetooth, close other BLE apps,
@@ -82,10 +89,25 @@ installation in Android. Opening the browser leaves WheelSoul and disconnects BL
 Network errors and GitHub's anonymous rate limit are shown explicitly; the
 **All GitHub releases** link remains available if the API cannot be reached.
 
+Version 0.02 uses the same private signing key and Android version code 3
+(0.01 used code 2). Install it over 0.01 without uninstalling to preserve local
+board names, layout, readings and maxima. In 0.01, select **Check for updates**,
+open the offered 0.02 release, download its APK and confirm Android's update dialog.
+
+## Extended telemetry in 0.02
+
+All 43 dashboard choices are now available on Android too, including pitch, roll,
+yaw, signed RPM, Ah counters, numeric serials and explicitly raw diagnostics.
+Live BLE shows the connected board's SW/HW revisions. Angles are read with normal
+frames; other additional fields use a separate read-only worker and expire after
+30 seconds. Missing or non-two-byte optional values warn once and show `-`.
+No configuration writes or extra permissions are introduced.
+
 ## First-version limitations
 
-- Hardware-tested protocol reference: XR hardware 4206 / Gemini 4134. The
-  TypeScript port has synthetic tests, but Android BLE still requires real-phone
+- Hardware-tested protocol reference: XR hardware 4206 / Gemini 4134. The user
+  confirmed initial Android 0.01 installation and BLE operation on a Pixel 7 Pro.
+  The extended Android 0.02 readouts have synthetic tests and still need phone
   validation. Do not infer compatibility from the supported handshake range alone.
 - **The app disconnects when it leaves the foreground or the screen is locked.**
   This avoids relying on suspended WebView keepalive timers. Continuous ride

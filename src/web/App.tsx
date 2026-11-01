@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { displayVersion } from '../../package.json'
+import iconUrl from '../../src_android/branding/icon.svg'
 import {
   APP_NAME, METRICS, STORAGE_KEY, addDiscovered, createStore, demoTelemetry,
   favoriteToConnect, field, fieldLabel, fieldValue, formatValue, gaugeAngle,
@@ -23,14 +24,14 @@ function load() {
 
 function Icon({ name }: { name: 'wheel' | 'settings' | 'chevron' | 'star' | 'edit' | 'close' | 'plus' | 'up' | 'down' }) {
   const paths = {
-    wheel: 'M8 12h8M12 8v8', settings: 'M4 7h16M4 17h16M8 4v6M16 14v6',
+    settings: 'M4 7h16M4 17h16M8 4v6M16 14v6',
     chevron: 'm6 9 6 6 6-6', star: 'm12 3 2.8 5.7 6.3.9-4.5 4.4 1 6.2-5.6-3-5.6 3 1-6.2L3 9.6l6.2-.9Z',
     edit: 'm15 4 5 5M4 20l1-6L16 3l5 5L10 19Z', close: 'm6 6 12 12M6 18 18 6',
     plus: 'M12 5v14M5 12h14', up: 'm6 15 6-6 6 6', down: 'm6 9 6 6 6-6',
   }
-  return <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7"
+  return <svg viewBox={name === 'wheel' ? '0 0 108 108' : '0 0 24 24'} width="20" height="20" fill={name === 'wheel' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.7"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {name === 'wheel' && <circle cx="12" cy="12" r="9" />}<path d={paths[name]} />
+    {name === 'wheel' ? <use href={`${iconUrl}#wheelsoul-mark`} /> : <path d={paths[name]} />}
   </svg>
 }
 
@@ -367,6 +368,7 @@ export default function App() {
       <section className="board-heading"><div><button className="board-name" aria-label="Select board" onClick={openBoards}>
         {board?.alias ?? 'No board selected'}{board && boards.favoriteId === board.id && <span className="favorite-label"><Icon name="star" /></span>}<Icon name="chevron" />
       </button><p className={`connection-status ${live ? 'connected' : ''}`}><span className="status-dot" />{connectionLabel}
+        {live && !demoMode && <span> · SW {board?.lastValid?.firmware ?? '-'} · HW {board?.lastValid?.hardware ?? '-'}</span>}
         {!live && lastSeen && <span> · Saved {lastSeen}</span>}{!board && <span> · No saved board data yet</span>}</p></div>
         <div className="mode-label"><span>Riding mode</span><strong>{board?.lastValid?.mode ?? '-'}</strong></div>
       </section>
@@ -436,6 +438,7 @@ export default function App() {
         if (!metric) { report('Unknown field.'); return }
         change((p) => ({ ...p, settings: { ...p.settings, widgets: [...p.settings.widgets, field(metric.id)] } }))
       }}><option value="" disabled>Choose a reading…</option>{METRICS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
+      <p className="small-note">Additional BLE fields include raw diagnostics. Raw values have no confirmed physical scale or decoded flag meaning; unavailable readings show -.</p>
       <div className="info-box demo-settings"><strong>Demo mode</strong>
         <label className="switch-row"><span>Try without a real board</span><input type="checkbox" checked={demoMode} onChange={(e) => { void setDemo(e.target.checked) }} /></label>
         <label className="switch-row"><span>Simulate a ride</span><input type="checkbox" checked={moving} disabled={!demoMode} onChange={(e) => setMoving(e.target.checked)} /></label>

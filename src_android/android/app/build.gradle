@@ -7,7 +7,7 @@ android {
         applicationId "com.pascalcorpsman.wheelsoul"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
+        versionCode 3
         versionName providers.gradleProperty('wheelSoulVersion').getOrElse(new groovy.json.JsonSlurper().parse(rootProject.file('../../package.json')).displayVersion)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

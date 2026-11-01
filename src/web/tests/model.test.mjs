@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   addDiscovered, createStore, demoTelemetry, field, fieldValue, favoriteToConnect,
-  formatValue, gaugeAngle, ingestTelemetry, moveWidget, parseStore, renameBoard, selectedBoard,
+  EXTENDED_METRICS, METRICS, formatValue, gaugeAngle, ingestTelemetry, isTelemetry,
+  moveWidget, parseStore, renameBoard, selectedBoard,
 } from '../model.ts'
 import { parseDiscovered, parseEvent } from '../bridge.ts'
 
@@ -79,6 +80,51 @@ test('missing readings are not zero measurements', () => {
   assert.equal(fieldValue(undefined, field('packVoltage')), null)
   assert.equal(formatValue(null, 2), '-')
   assert.equal(formatValue(0, 2), '0.00')
+})
+
+test('all 43 telemetry widgets persist for the shared browser and Android dashboard', () => {
+  assert.equal(METRICS.length, 43)
+  assert.equal(new Set(METRICS.map((item) => item.id)).size, METRICS.length)
+  assert.ok(METRICS.some((item) => item.id === 'pitch'))
+  const store = physical()
+  store.settings.primary[0] = field('pitch')
+  store.settings.widgets = EXTENDED_METRICS.map((metric) => field(metric.id))
+  const loaded = parseStore(JSON.stringify(store))
+  assert.equal(loaded.settings.primary[0].metric, 'pitch')
+  assert.equal(loaded.settings.widgets.length, EXTENDED_METRICS.length)
+  const board = loaded.physical.boards[0]
+  assert.equal(fieldValue(board, field('pitch')), 0)
+  assert.equal(fieldValue(board, field('firmware')), 4134)
+  assert.equal(fieldValue(board, field('unknown1Raw')), null)
+  assert.equal(formatValue(fieldValue(board, field('unknown1Raw')), 0), '-')
+})
+
+test('old browser and native telemetry without new fields remains valid and unknown, not zero', () => {
+  const store = physical(), board = store.physical.boards[0]
+  for (const metric of EXTENDED_METRICS) if (metric.id !== 'speed') delete board.lastValid[metric.id]
+  assert.equal(isTelemetry(board.lastValid), true)
+  store.settings.widgets = [field('pitch'), field('tripAmpHours')]
+  const loaded = parseStore(JSON.stringify(store))
+  assert.equal(fieldValue(loaded.physical.boards[0], field('pitch')), null)
+  assert.equal(fieldValue(loaded.physical.boards[0], field('tripAmpHours')), null)
+  assert.equal(loaded.physical.boards[0].alias, board.alias)
+  assert.equal(loaded.physical.boards[0].maxSpeed, board.maxSpeed)
+})
+
+test('new optional telemetry is validated before replacing physical cached readings', () => {
+  const store = physical(), previous = store.physical.boards[0].lastValid
+  for (const invalid of [
+    { pitch: -180.1 }, { roll: 180.1 }, { yaw: '0' }, { pitch: Infinity },
+    { rpm: 32768 }, { rpm: .5 }, { tripAmpHours: -.001 }, { regenAmpHours: 12 },
+    { statusFlagsRaw: 65536 }, { unknown1Raw: 1.5 }, { hardware: -1 }, { firmware: '4134' },
+  ]) {
+    const data = { ...previous, ...invalid }
+    assert.equal(isTelemetry(data), false)
+    assert.throws(() => ingestTelemetry(store, 'physical', 'board-a', data), /Invalid measurement/)
+    assert.equal(store.physical.boards[0].lastValid, previous)
+  }
+  assert.equal(isTelemetry({ ...previous, pitch: -180, roll: 180, yaw: null, statusFlagsRaw: 65535 }), true)
+  assert.equal(isTelemetry(demoTelemetry('demo-xr-1', 100000, true)), true)
 })
 
 test('legacy cached motor zero is unknown without hiding valid zero measurements', () => {

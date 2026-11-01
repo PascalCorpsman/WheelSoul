@@ -10,9 +10,10 @@ the PC version uses a local Python BLE server.
 
 See [Android build and installation instructions](./src_android/README.md).
 [Download the Android debug APK from GitHub Releases](https://github.com/PascalCorpsman/WheelSoul/releases).
-No app store or USB tools are needed. The preview version **0.01** is shown beside
-the app name in both the browser dashboard and Android app. Real-phone BLE
-validation is still pending; see the Android instructions for current limitations.
+No app store or USB tools are needed. The preview version **0.02** is shown beside
+the app name in both the browser dashboard and Android app. Initial installation
+and BLE operation on a Pixel 7 Pro have been confirmed by the user; wider Android
+validation is still pending. See the Android instructions for current limitations.
 Dashboard settings include **Check for updates**, which checks GitHub for newer
 Android APKs, including preview releases, and opens their download page. Android
 installation remains manual; BLE operation itself needs no Internet connection.
@@ -42,6 +43,31 @@ installation remains manual; BLE operation itself needs no Internet connection.
   explicit connection or reload.
 
 The connection button is directly below the header: selecting a board comes first.
+
+### Extended telemetry
+
+The shared Android/browser field picker offers 43 readings, including pitch, roll, yaw, signed wheel RPM,
+ride consumption/regeneration in Ah, rotation/mileage counters, numeric serials,
+hardware/firmware revisions and riding mode code. It also exposes raw warning,
+light, status, headroom, lifetime-counter, last-error and unknown-characteristic
+values. These cover all 32 readable vendor characteristics; unknown semantics
+remain explicitly **raw**, and unavailable values remain `-`.
+
+Add fields using **Configure dashboard / Add a reading**. Existing layouts, names,
+favorite boards and cached measurements are preserved. Live connections
+show `Live BLE · SW 4134 · HW 4206` with the connected board's actual revisions.
+Android 0.02 adds the same native readouts and revision banner as the browser.
+
+The extended browser protocol was checked in a 76.09-second live XR session:
+64 frames, all 20 additional characteristic values available, all 15 cell groups
+fresh throughout the final 30 seconds, and Delirium unchanged. Mean frame interval
+was 1.208 seconds (maximum 1.5 seconds). Reading a raw value successfully does not
+validate its still-unknown meaning.
+
+Restart the Python server after updating its sources, rebuild the frontend and
+reload the browser. Android users can update from 0.01 using **Check for updates**
+and install the 0.02 APK over the existing app; uninstalling is not required.
+See [the BLE inventory](./README-BLE.md) for encodings and polling details.
 
 ## Tested hardware and compatibility
 
@@ -74,8 +100,9 @@ Newer firmware and newer models are not supported by this handshake. XR firmware
 4155 and later removes cell-voltage access according to the community protocol
 reference. WheelSoul will not downgrade or modify a board to regain access.
 
-The Pixel 7 Pro is the first Android test target. Android transport validation on
-real hardware is still pending; the protocol port has synthetic tests. The first
+The user confirmed initial installation and BLE operation of Android preview 0.01
+on a Pixel 7 Pro. Wider device and firmware coverage still needs validation; the
+protocol port also has synthetic tests. The first
 APK deliberately disconnects in the background or when the screen is locked.
 
 ## Run the dashboard on your computer

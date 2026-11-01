@@ -1,7 +1,7 @@
 {
   "name": "wheelsoul",
-  "version": "0.0.1",
-  "displayVersion": "0.01",
+  "version": "0.0.2",
+  "displayVersion": "0.02",
   "private": true,
   "type": "module",
   "scripts": {

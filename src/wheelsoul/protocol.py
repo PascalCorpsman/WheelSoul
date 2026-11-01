@@ -28,6 +28,30 @@ FIELDS = {
     "cell": "31b",
 }
 MODES = {4: "Sequoia", 5: "Cruz", 6: "Mission", 7: "Elevated", 8: "Delirium", 9: "Custom"}
+ANGLES = ("pitch", "roll", "yaw")
+EXTRA_FIELDS = {
+    "board_serial": ("301", "boardSerial", 1, 0),
+    "low_battery_5": ("304", "lowBattery5Raw", 1, 0),
+    "low_battery_20": ("305", "lowBattery20Raw", 1, 0),
+    "battery_serial": ("306", "batterySerial", 1, 0),
+    "pitch": ("307", "pitch", -0.1, 180),
+    "roll": ("308", "roll", -0.1, 180),
+    "yaw": ("309", "yaw", -0.1, 180),
+    "light_mode": ("30c", "lightModeRaw", 1, 0),
+    "front_light": ("30d", "frontLightRaw", 1, 0),
+    "rear_light": ("30e", "rearLightRaw", 1, 0),
+    "status_flags": ("30f", "statusFlagsRaw", 1, 0),
+    "trip_amp_hours": ("313", "tripAmpHours", 0.00018, 0),
+    "regen_amp_hours": ("314", "regenAmpHours", 0.00018, 0),
+    "headroom": ("317", "headroomRaw", 1, 0),
+    "lifetime_amp_hours": ("31a", "lifetimeAmpHoursRaw", 1, 0),
+    "last_error": ("31c", "lastErrorRaw", 1, 0),
+    "unknown_1": ("31d", "unknown1Raw", 1, 0),
+    "unknown_2": ("31e", "unknown2Raw", 1, 0),
+    "unknown_3": ("31f", "unknown3Raw", 1, 0),
+    "unknown_4": ("320", "unknown4Raw", 1, 0),
+}
+FIELDS.update({name: definition[0] for name, definition in EXTRA_FIELDS.items()})
 
 
 class ProtocolError(RuntimeError):
@@ -111,6 +135,10 @@ class Session:
         self.io_lock = io_lock if io_lock is not None else asyncio.Lock()
         self.cells = CellSamples()
         self.missing_optional = set()
+        self.extra_values = {
+            definition[1]: None for name, definition in EXTRA_FIELDS.items() if name not in ANGLES
+        }
+        self.extra_updated = None
 
     async def read(self, name, optional=False):
         identifier = field_uuid(name)
@@ -132,6 +160,31 @@ class Session:
                     target, self.firmware.to_bytes(2, "big"), response=True,
                 ), 5,
             )
+
+    async def _read_extra(self, name):
+        data = await self.read(name, optional=True)
+        if data is None:
+            return None
+        if len(data) != 2:
+            warning = f"length:{name}"
+            if warning not in self.missing_optional:
+                LOG.warning("Optional telemetry %s has %s bytes, not two; showing unavailable.",
+                            name, len(data))
+                self.missing_optional.add(warning)
+            return None
+        value = word(data)
+        if name in ANGLES and value > 3600:
+            raise ProtocolError(f"Invalid {name} encoding: {value}; expected 0-3600.")
+        _suffix, _output, scale, offset = EXTRA_FIELDS[name]
+        return round(value * scale + offset, 5)
+
+    async def _read_extras(self):
+        values = {}
+        for name, (_suffix, output, _scale, _offset) in EXTRA_FIELDS.items():
+            if name not in ANGLES:
+                values[output] = await self._read_extra(name)
+        self.extra_values = values
+        self.extra_updated = time.monotonic()
 
     async def authenticate(self):
         original_mode = word(await self.read("mode"))
@@ -207,7 +260,14 @@ class Session:
             if "motor_temperature" not in self.missing_optional:
                 LOG.warning("Legacy XR reports zero motor temperature; treating it as unavailable.")
                 self.missing_optional.add("motor_temperature")
+        angles = {name: await self._read_extra(name) for name in ANGLES}
+        now = time.monotonic()
+        extras = self.extra_values if (
+            self.extra_updated is not None and now - self.extra_updated <= CELL_MAX_AGE
+        ) else dict.fromkeys(self.extra_values)
         return {
+            **extras,
+            **angles,
             "source": "physical",
             "timestamp": time.time() * 1000,
             "hardware": self.hardware,
@@ -218,6 +278,10 @@ class Session:
             "batteryPercent": battery,
             "current": round(word(raw["current"], signed=True) * 0.002, 3),
             "speed": round(abs(word(raw["rpm"], signed=True)) * WHEEL_CIRCUMFERENCE_M * 60 / 1000, 3),
+            "rpm": word(raw["rpm"], signed=True),
+            "tripRotations": word(raw["trip"]),
+            "lifetimeMiles": word(raw["lifetime"]),
+            "modeCode": mode,
             "mode": MODES.get(mode, f"Unknown ({mode})"),
             "cellVoltages": self.cells.values(time.monotonic()),
             "motorTemperature": motor_temperature,
@@ -242,11 +306,17 @@ class Session:
             await asyncio.sleep(KEEPALIVE_INTERVAL)
             await self._touch_session()
 
+    async def _poll_extras(self):
+        while True:
+            await self._read_extras()
+            await asyncio.sleep(1)
+
     async def stream(self, emit):
         async with asyncio.TaskGroup() as tasks:
             tasks.create_task(self._poll_cells())
             tasks.create_task(self._poll_frames(emit))
             tasks.create_task(self._keep_alive())
+            tasks.create_task(self._poll_extras())
 
 
 async def identity(client):

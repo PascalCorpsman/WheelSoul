@@ -38,9 +38,9 @@ Every abbreviated identifier below uses the suffix
 | `e659f309` | R/W/N | Yaw |
 | `e659f30a` | R/W/N | Ride wheel rotations |
 | `e659f30b` | R/W/N | Wheel RPM |
-| `e659f30c` | R/W/N | Lights-related field; not used |
-| `e659f30d` | R/W/N | Lights-related field; not used |
-| `e659f30e` | R/W/N | Lights-related field; not used |
+| `e659f30c` | R/W/N | Light mode; exposed as a raw read-only value |
+| `e659f30d` | R/W/N | Front-light field; exposed as a raw read-only value |
+| `e659f30e` | R/W/N | Rear-light field; exposed as a raw read-only value |
 | `e659f30f` | R/W/N | Status/error flags |
 | `e659f310` | R/W/N | Controller and motor temperatures |
 | `e659f311` | R/W/N | Firmware version / legacy session command |
@@ -88,6 +88,38 @@ Most values are two-byte big-endian integers.
 | Controller/motor temperature | `310`: byte 0 controller, byte 1 motor, degrees Celsius |
 | XR battery temperature | `315`: byte 1, degrees Celsius |
 | Gemini 4134 cells | Byte 0 group index 0-14; byte 1 × 0.02 V; index 15 unused |
+| Pitch / roll / yaw | Unsigned integer: `(1800 - value) × 0.1` degrees; valid encoded range 0-3600 |
+| Wheel RPM | Signed two-byte integer; direction retained separately from absolute speed |
+| XR ride consumption / regeneration | `313` / `314`: unsigned integer × 0.00018 Ah |
+| Board / battery serial | `301` / `306`: unsigned numeric identifier |
+| Raw diagnostic / light / warning fields | Unsigned two-byte integer, explicitly labelled raw; no inferred scale or flag meaning |
+
+### Extended telemetry
+
+The shared field picker covers all **32 readable vendor characteristics**
+(`301` through `320`), including existing grouped fields such as temperatures and
+cell groups. Speed, signed RPM, rotations, whole miles, revision numbers and riding
+mode code can also be selected as dashboard widgets.
+
+Angles and Ah conversions follow the community protocol reference. The warning
+fields, light values, status flags, headroom, lifetime Ah-related counter, last-error
+field and four unknown fields are exposed as **raw diagnostics**, not decoded
+warnings, percentages, physical Ah totals or safety guarantees. A missing field or
+an unexpected payload length is logged and displayed as `-`; no value is invented.
+
+Angles are read with normal frames. Other additional fields use a separate
+read-only polling worker with a one-second pause between passes, so they do not
+expand each regular frame's read sequence. Their cached values expire after 30
+seconds. The existing cell and session-keepalive workers remain separate.
+
+These additions were first evaluated in the browser and are also included in the
+native Android transport from version 0.02. Authentication endpoints and standard
+GATT descriptors are not dashboard readings.
+
+A 76.09-second live test on 4206/4134 delivered 64 frames and all 20 additional
+characteristic values. All 15 cell groups remained fresh throughout the final 30
+seconds, and riding mode stayed Delirium. This verifies read availability and
+polling stability, not the physical semantics of fields explicitly labelled raw.
 
 WheelSoul conservatively treats a zero motor-temperature byte on supported legacy
 XR boards as unavailable and displays `-`, including for older cached readings.

@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from wheelsoul.protocol import (
-    AUTH_READ, AUTH_WRITE, CELL_MAX_AGE, CellSamples, ProtocolError, Session,
+    AUTH_READ, AUTH_WRITE, CELL_MAX_AGE, EXTRA_FIELDS, FIELDS, CellSamples, ProtocolError, Session,
     decode_cell, field_uuid, gemini_response, identity, word,
 )
 
@@ -27,6 +27,13 @@ class FakeClient:
             "battery": 43, "trip": 1000, "rpm": -100, "current": -27,
             "voltage": 567, "lifetime": 2660,
         }
+        self.values.update(dict.fromkeys(EXTRA_FIELDS, 0))
+        self.values.update({
+            "pitch": 1800, "roll": 1750, "yaw": 1900,
+            "trip_amp_hours": 1000, "regen_amp_hours": 500,
+            "board_serial": 1001, "battery_serial": 2001,
+            "status_flags": 65535, "unknown_1": 1234,
+        })
         self.services = SimpleNamespace(get_characteristic=lambda identifier: SimpleNamespace(
             uuid=identifier, properties=["read", "write", "notify"],
         ))
@@ -101,6 +108,11 @@ class ProtocolTests(unittest.TestCase):
                 Session(client, hardware, firmware)
             self.assertEqual(client.writes, [])
 
+    def test_inventory_covers_all_32_readable_vendor_fields_without_authentication_endpoints(self):
+        self.assertEqual(set(FIELDS.values()), {f"{value:03x}" for value in range(0x301, 0x321)})
+        self.assertNotIn("3fe", FIELDS.values())
+        self.assertNotIn("3ff", FIELDS.values())
+
 
 class AsyncProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_fragmented_authentication_and_write_allowlist(self):
@@ -148,6 +160,84 @@ class AsyncProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frame["batteryTemperature"], 18)
         self.assertEqual(frame["cellVoltages"], [None] * 15)
         self.assertEqual(frame["mode"], "Delirium")
+        self.assertEqual(frame["rpm"], -100)
+        self.assertEqual(frame["tripRotations"], 1000)
+        self.assertEqual(frame["lifetimeMiles"], 2660)
+        self.assertEqual(frame["pitch"], 0)
+        self.assertEqual(frame["roll"], 5)
+        self.assertEqual(frame["yaw"], -10)
+        self.assertEqual(frame["hardware"], 4206)
+        self.assertEqual(frame["firmware"], 4134)
+        self.assertEqual(frame["modeCode"], 8)
+
+    async def test_angle_unsigned_offset_scale_endpoints_and_invalid_encoding(self):
+        client = FakeClient(locked=False)
+        session = Session(client, 4206, 4134)
+        for encoded, expected in ((0, 180), (1, 179.9), (1800, 0), (1801, -.1), (3600, -180)):
+            for name in ("pitch", "roll", "yaw"):
+                client.values[name] = encoded
+            frame = await session.snapshot()
+            for name in ("pitch", "roll", "yaw"):
+                self.assertEqual(frame[name], expected)
+        client.values["pitch"] = 3601
+        with self.assertRaisesRegex(ProtocolError, "Invalid pitch encoding"):
+            await session.snapshot()
+        self.assertEqual(client.writes, [])
+
+    async def test_extended_reads_scale_ah_preserve_raw_zero_and_never_write(self):
+        client = FakeClient(locked=False)
+        session = Session(client, 4206, 4134)
+        initial = await session.snapshot()
+        self.assertIsNone(initial["tripAmpHours"])
+        await session._read_extras()
+        frame = await session.snapshot()
+        self.assertEqual(frame["tripAmpHours"], .18)
+        self.assertEqual(frame["regenAmpHours"], .09)
+        self.assertEqual(frame["boardSerial"], 1001)
+        self.assertEqual(frame["batterySerial"], 2001)
+        self.assertEqual(frame["statusFlagsRaw"], 65535)
+        self.assertEqual(frame["unknown1Raw"], 1234)
+        self.assertEqual(frame["headroomRaw"], 0)
+        self.assertEqual(frame["lastErrorRaw"], 0)
+        self.assertEqual(client.writes, [])
+
+    async def test_extended_values_expire_at_the_same_exact_30_second_threshold(self):
+        session = Session(FakeClient(locked=False), 4206, 4134)
+        await session._read_extras()
+        with patch("wheelsoul.protocol.time.monotonic", return_value=session.extra_updated + CELL_MAX_AGE):
+            self.assertEqual((await session.snapshot())["tripAmpHours"], .18)
+        with patch("wheelsoul.protocol.time.monotonic", return_value=session.extra_updated + CELL_MAX_AGE + .001):
+            frame = await session.snapshot()
+            for output in session.extra_values:
+                self.assertIsNone(frame[output])
+            self.assertEqual(frame["pitch"], 0)
+            self.assertEqual(frame["current"], -.054)
+
+    async def test_missing_or_non_word_optional_values_warn_once_and_remain_unknown(self):
+        client = FakeClient(locked=False)
+        lookup = client.services.get_characteristic
+        client.services.get_characteristic = lambda identifier: (
+            None if identifier == field_uuid("yaw") else lookup(identifier)
+        )
+        original_read = client.read_gatt_char
+
+        async def read(target):
+            if target.uuid == field_uuid("unknown_1"):
+                return bytes([1, 2, 3, 4])
+            return await original_read(target)
+
+        client.read_gatt_char = read
+        session = Session(client, 4206, 4134)
+        with self.assertLogs("wheelsoul.protocol", level="WARNING") as log:
+            await session._read_extras()
+            frame = await session.snapshot()
+            await session._read_extras()
+            await session.snapshot()
+        self.assertEqual(len(log.output), 2)
+        self.assertIsNone(frame["yaw"])
+        self.assertIsNone(frame["unknown1Raw"])
+        self.assertEqual(frame["packVoltage"], 56.7)
+        self.assertEqual(client.writes, [])
 
     async def test_locked_data_is_never_returned(self):
         with self.assertRaisesRegex(ProtocolError, "locked"):
@@ -208,6 +298,8 @@ class AsyncProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(client.writes), writes)
         self.assertGreater(writes, 1)
         self.assertEqual(frames[-1]["cellVoltages"], [3.8] * 15)
+        self.assertEqual(frames[-1]["tripAmpHours"], .18)
+        self.assertEqual(frames[-1]["roll"], 5)
         self.assertTrue(all(uuid == field_uuid("firmware") for uuid, *_ in client.writes))
 
     async def test_keepalive_failure_stops_the_stream(self):
