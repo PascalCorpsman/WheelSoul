@@ -1,0 +1,13 @@
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.env
+.env.*
+*.apk
+*.jsonl
+*-state.json
+*.log
+/run.sh
