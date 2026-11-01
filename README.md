@@ -4,9 +4,18 @@ An independent local telemetry dashboard for older Onewheel XR boards. WheelSoul
 started as a replacement for an obsolete OneWave Android app and is being developed
 by PascalCorpsman with an AI assistant using Copilot SDK in VS Code.
 
-**This repository currently contains a browser dashboard and a local Python BLE
-server, not an Android APK.** The browser interface is the design prototype for a
-future Android app.
+**WheelSoul now has a PC/browser version and an Android debug prototype.** Both
+share the same dashboard. On Android, Bluetooth runs directly on the phone;
+the PC version uses a local Python BLE server.
+
+See [Android build and installation instructions](./src_android/README.md).
+[Download the Android debug APK from GitHub Releases](https://github.com/PascalCorpsman/WheelSoul/releases).
+No app store or USB tools are needed. The preview version **0.01** is shown beside
+the app name in both the browser dashboard and Android app. Real-phone BLE
+validation is still pending; see the Android instructions for current limitations.
+Dashboard settings include **Check for updates**, which checks GitHub for newer
+Android APKs, including preview releases, and opens their download page. Android
+installation remains manual; BLE operation itself needs no Internet connection.
 
 ![WheelSoul dashboard preview](./preview.png)
 
@@ -65,7 +74,9 @@ Newer firmware and newer models are not supported by this handshake. XR firmware
 4155 and later removes cell-voltage access according to the community protocol
 reference. WheelSoul will not downgrade or modify a board to regain access.
 
-The Pixel 7 Pro is the intended future Android target, not a tested native platform.
+The Pixel 7 Pro is the first Android test target. Android transport validation on
+real hardware is still pending; the protocol port has synthetic tests. The first
+APK deliberately disconnects in the background or when the screen is locked.
 
 ## Run the dashboard on your computer
 
@@ -147,7 +158,8 @@ This does not require browser Web Bluetooth support.
 
 The server listens only on `127.0.0.1`. Opening its URL on a phone does not turn the
 phone into a BLE client. A publicly hosted static page cannot use this local
-same-origin BLE API. The future Android app will need its own native BLE transport.
+same-origin BLE API. The Android prototype already includes its own native BLE transport; use that APK
+for a phone-only connection.
 
 ## Safety and measurement limitations
 
@@ -188,7 +200,7 @@ protocol notes.
 
 ## Source layout and tests
 
-All application and test source lives under `src`:
+PC/shared source lives under `src`; Android-specific source is separate:
 
 ```text
 src/
@@ -196,10 +208,17 @@ src/
   web/             English React/TypeScript GUI, model, bridge, CSS and Vite config
     tests/         Front-end model and event-validation tests
   tests/           Python protocol and HTTP/WebSocket integration tests
+src_android/
+  native/          Android BLE transport and legacy XR protocol
+  tests/           Synthetic tests for the Android protocol port
+  android/         Native Capacitor/Gradle Android project
+  branding/        WheelSoul launcher-icon source
 ```
 
-Dependency manifests and documentation are in the repository root. `dist`, virtual
-environments, dependencies, APKs, local state, and diagnostic logs are ignored.
+`build_android.sh` is the versioned debug-APK builder. Dependency manifests and
+Capacitor configuration are in the repository root. `dist`, Android build outputs,
+virtual environments, dependencies, APKs, private signing keys, local state, and
+diagnostic logs are ignored.
 
 ```sh
 npm test
@@ -221,5 +240,6 @@ separately rather than copying its application source.
 WheelSoul is unofficial and is not affiliated with Future Motion. Product names
 belong to their respective owners. The original APK and private board addresses are
 not included. A project license has not yet been selected; do not assume a reuse
-license from this README. Licensing and native Android packaging remain publication
-tasks.
+license from this README. Licensing and real-phone validation remain publication
+tasks. Android builds use a private, stable debug key so later GitHub Release APKs
+can update existing installations.

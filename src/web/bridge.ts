@@ -10,6 +10,13 @@ export interface Connection {
 }
 export interface SampleEvent { type: 'telemetry'; boardId: string; data: Telemetry }
 export interface Availability { ready: boolean; enabled: boolean; error: string | null }
+export interface Transport {
+  start(): Promise<void>
+  scan(): Promise<DiscoveredBoard[]>
+  connect(id: string): Promise<void>
+  disconnect(): Promise<void>
+  stop(): void
+}
 
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string'

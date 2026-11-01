@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">WheelSoul</string>
+    <string name="title_activity_main">WheelSoul</string>
+    <string name="package_name">com.pascalcorpsman.wheelsoul</string>
+    <string name="custom_url_scheme">com.pascalcorpsman.wheelsoul</string>
+</resources>

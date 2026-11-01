@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { displayVersion } from '../../package.json'
 import {
   APP_NAME, METRICS, STORAGE_KEY, addDiscovered, createStore, demoTelemetry,
   favoriteToConnect, field, fieldLabel, fieldValue, formatValue, gaugeAngle,
   ingestTelemetry, moveWidget, parseStore, renameBoard, selectedBoard,
 } from './model'
 import type { Board, DiscoveredBoard, Domain, Field, Store } from './model'
-import { Bridge, OFFLINE } from './bridge'
-import type { Availability, Connection } from './bridge'
+import { OFFLINE } from './bridge'
+import type { Availability, Connection, SampleEvent, Transport } from './bridge'
+import { IS_ANDROID, createTransport } from './runtime'
+import { RELEASES_URL, checkForUpdate } from './updates'
+import type { Update } from './updates'
 
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error) }
 function load() {
@@ -106,6 +110,56 @@ function FieldEditor({ item, label, primary, onChange }: { item: Field; label: s
   </div>
 }
 
+function UpdatePanel() {
+  const [state, setState] = useState<
+    { status: 'idle' | 'checking' | 'current' } |
+    { status: 'available'; update: Update } |
+    { status: 'error'; message: string }
+  >({ status: 'idle' })
+  const request = useRef<AbortController | null>(null)
+  useEffect(() => () => {
+    const controller = request.current
+    request.current = null
+    controller?.abort()
+  }, [])
+
+  async function check() {
+    if (request.current) return
+    const controller = new AbortController()
+    request.current = controller
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; controller.abort() }, 10_000)
+    setState({ status: 'checking' })
+    try {
+      const update = await checkForUpdate(displayVersion, controller.signal)
+      if (request.current === controller) setState(update ? { status: 'available', update } : { status: 'current' })
+    } catch (error) {
+      if (request.current === controller) setState({
+        status: 'error', message: timedOut ? 'Update check timed out. Check your Internet connection and try again.' : errorMessage(error),
+      })
+    } finally {
+      clearTimeout(timer)
+      if (request.current === controller) request.current = null
+    }
+  }
+
+  return <div className="info-box">
+    <strong>Android updates · Version {displayVersion}</strong>
+    <p>Check GitHub for newer APKs, including preview releases. No account is needed.</p>
+    <button className="text-button" disabled={state.status === 'checking'} onClick={() => { void check() }}>
+      {state.status === 'checking' ? 'Checking GitHub…' : 'Check for updates'}
+    </button>
+    {state.status === 'current' && <p role="status">No newer Android APK is available.</p>}
+    {state.status === 'available' && <p role="status">WheelSoul {state.update.version} is available.{' '}
+      <a href={state.update.url} target={IS_ANDROID ? undefined : '_blank'} rel="noopener noreferrer">Open GitHub download</a>
+    </p>}
+    {state.status === 'error' && <div className="notice error" role="alert">{state.message}</div>}
+    <p><a href={RELEASES_URL} target={IS_ANDROID ? undefined : '_blank'} rel="noopener noreferrer">All GitHub releases</a></p>
+    <p>Download the APK in your browser and confirm installation in Android. Nothing is installed automatically.
+      {IS_ANDROID && ' Opening GitHub leaves WheelSoul and disconnects BLE.'}</p>
+  </div>
+}
+
 export default function App() {
   const [initial] = useState(load)
   const [store, setStore] = useState(initial.store)
@@ -122,7 +176,7 @@ export default function App() {
   const connectionRef = useRef(connection)
   const [frameId, setFrameId] = useState<string | null>(null)
   const [availability, setAvailability] = useState<Availability>({ ready: false, enabled: false, error: null })
-  const bridge = useRef<Bridge | null>(null)
+  const bridge = useRef<Transport | null>(null)
   const [visible, setVisible] = useState<DiscoveredBoard[]>([])
   const [scanning, setScanning] = useState(false)
   const scanPromise = useRef<Promise<DiscoveredBoard[]> | null>(null)
@@ -151,7 +205,9 @@ export default function App() {
   }, [report])
 
   useEffect(() => {
-    const client = new Bridge((event) => {
+    let cancelled = false
+    let client: Transport | null = null
+    const onEvent = (event: Connection | SampleEvent) => {
       if (event.type === 'state') {
         connectionRef.current = event
         setConnection(event)
@@ -167,13 +223,18 @@ export default function App() {
         })
         setFrameId(valid ? event.boardId : null)
       }
-    }, setAvailability, report)
-    bridge.current = client
-    void client.start()
-    return () => { client.stop(); bridge.current = null }
+    }
+    void createTransport(onEvent, setAvailability, report, setForeground).then((created) => {
+      if (cancelled) { created.stop(); return }
+      client = created
+      bridge.current = created
+      return created.start()
+    }).catch(report)
+    return () => { cancelled = true; client?.stop(); bridge.current = null }
   }, [change, report])
 
   useEffect(() => {
+    if (IS_ANDROID) return
     const listener = () => setForeground(document.visibilityState === 'visible')
     document.addEventListener('visibilitychange', listener)
     return () => document.removeEventListener('visibilitychange', listener)
@@ -182,7 +243,7 @@ export default function App() {
   const scan = useCallback((): Promise<DiscoveredBoard[]> => {
     if (scanPromise.current) return scanPromise.current
     const client = bridge.current
-    if (!client) return Promise.reject(new Error('Local server is not ready.'))
+    if (!client) return Promise.reject(new Error('Bluetooth interface is not ready.'))
     setScanning(true)
     const request = client.scan().then((found) => {
       setVisible(found)
@@ -233,13 +294,13 @@ export default function App() {
     manuallyDisconnected.current = true
     if (demoMode) setDemoId(null)
     else if (bridge.current) await bridge.current.disconnect()
-    else throw new Error('Local server is not ready.')
+    else throw new Error('Bluetooth interface is not ready.')
   }
 
   const setDemo = async (enabled: boolean) => {
     try {
       if (enabled && physicalActive) {
-        if (!bridge.current) throw new Error('Local server is not ready.')
+        if (!bridge.current) throw new Error('Bluetooth interface is not ready.')
         manuallyDisconnected.current = true
         await bridge.current.disconnect()
       }
@@ -264,7 +325,7 @@ export default function App() {
           setDemoId(id)
         } else {
           const client = bridge.current
-          if (!client) throw new Error('Local server is not ready.')
+          if (!client) throw new Error('Bluetooth interface is not ready.')
           manuallyDisconnected.current = true
           if (physicalActive) await client.disconnect()
           await client.connect(id)
@@ -281,9 +342,9 @@ export default function App() {
     connection.status === 'connecting' && connection.boardId === board?.id && !demoMode ? 'Connecting…' : 'Offline'
 
   return <>
-    <aside className="preview-note">WheelSoul web app <span>·</span> {availability.ready && availability.enabled ? 'Live BLE through this computer' : 'Demo available without a board'}</aside>
+    <aside className="preview-note">WheelSoul {IS_ANDROID ? 'Android' : 'web'} app <span>·</span> {availability.ready && availability.enabled ? (IS_ANDROID ? 'Live BLE on this phone' : 'Live BLE through this computer') : 'Demo available without a board'}</aside>
     <main className="app-shell">
-      <header className="app-header"><div className="brand"><Icon name="wheel" /><h1>{APP_NAME}</h1></div>
+      <header className="app-header"><div className="brand"><Icon name="wheel" /><h1>{APP_NAME}</h1><span className="app-version" aria-label={`Version ${displayVersion}`}>{displayVersion}</span></div>
         <div className="header-actions"><button className={`demo-toggle ${demoMode ? 'active' : ''}`} aria-label="Demo mode"
           aria-pressed={demoMode} onClick={() => { void setDemo(!demoMode) }}>Demo</button>
           <button className="icon-button" aria-label="Configure dashboard" onClick={() => setPanel('settings')}><Icon name="settings" /></button>
@@ -301,8 +362,8 @@ export default function App() {
         <span className="connection-symbol">{active ? '×' : '+'}</span>{active ? 'Disconnect' : 'Choose board & connect'}
       </button><p className="connection-hint">{demoMode ? 'Configure without a board. Real measurements remain untouched.' : 'Last valid readings are saved separately for each board.'}</p></div>
       {demoMode && <div className="demo-notice"><span className="status-dot" />Demo data · not a real board</div>}
-      {!demoMode && !availability.ready && <div className="notice error" role="status">{availability.error ?? 'Waiting for the local BLE server…'}</div>}
-      {!demoMode && availability.ready && !availability.enabled && <div className="notice error" role="status">This server was started with --demo-only. Restart without that flag to use BLE.</div>}
+      {!demoMode && !availability.ready && <div className="notice error" role="status">{availability.error ?? (IS_ANDROID ? 'Waiting for the Bluetooth interface…' : 'Waiting for the local BLE server…')}</div>}
+      {!demoMode && availability.ready && !availability.enabled && <div className="notice error" role="status">{IS_ANDROID ? (availability.error ?? 'Bluetooth is disabled. Turn it on to scan for boards.') : 'This server was started with --demo-only. Restart without that flag to use BLE.'}</div>}
       <section className="board-heading"><div><button className="board-name" aria-label="Select board" onClick={openBoards}>
         {board?.alias ?? 'No board selected'}{board && boards.favoriteId === board.id && <span className="favorite-label"><Icon name="star" /></span>}<Icon name="chevron" />
       </button><p className={`connection-status ${live ? 'connected' : ''}`}><span className="status-dot" />{connectionLabel}
@@ -320,7 +381,7 @@ export default function App() {
     </main>
 
     {panel === 'boards' && <Modal title="Boards" onClose={() => setPanel(null)}>
-      <p className="dialog-intro">{demoMode ? 'Two virtual boards. Names, cached readings and maxima stay separate.' : 'Turn on your board, close other Onewheel apps, and keep it safely stationary near this computer.'}</p>
+      <p className="dialog-intro">{demoMode ? 'Two virtual boards. Names, cached readings and maxima stay separate.' : `Turn on your board, close other Onewheel apps, and keep it safely stationary near this ${IS_ANDROID ? 'phone' : 'computer'}.`}</p>
       {message && <div className="notice error">{message}</div>}
       {!demoMode && <button className="add-fields" disabled={scanning || !availability.ready || !availability.enabled} onClick={() => { void scan().catch(report) }}>{scanning ? 'Scanning BLE…' : 'Scan for boards'}</button>}
       <div className="board-list">{boards.boards.map((entry) => {
@@ -353,6 +414,7 @@ export default function App() {
 
     {panel === 'settings' && <Modal title="Your dashboard" onClose={() => setPanel(null)}>
       <p className="dialog-intro">Choose readings, order and precision. Changes appear immediately and survive a reload.</p>
+      <UpdatePanel />
       <h3 className="settings-heading">Primary fields</h3>
       {store.settings.primary.map((item, i) => <FieldEditor key={i} item={item} primary label={`Primary field ${i + 1}`} onChange={(updated) => change((previous) => ({
         ...previous, settings: { ...previous.settings, primary: previous.settings.primary.map((f, n) => n === i ? updated : f) },
@@ -385,7 +447,7 @@ export default function App() {
 
     {loadError && <Modal title="Saved data cannot be read" onClose={() => {}}>
       <div className="notice error" role="alert">{loadError}</div><p>Your existing local data has not been overwritten.
-        Discarding it removes all saved board data and dashboard settings for this browser origin.</p>
+        Discarding it removes all saved board data and dashboard settings for this {IS_ANDROID ? 'app' : 'browser origin'}.</p>
       <button className="connect-button" onClick={() => location.reload()}>Reload</button><button className="text-button danger" onClick={() => {
         try { localStorage.removeItem(STORAGE_KEY); savePaused.current = false; change(() => createStore()); setLoadError(null); setSaveError(null) }
         catch (error) { report(error) }

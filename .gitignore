@@ -11,3 +11,14 @@ __pycache__/
 *-state.json
 *.log
 /run.sh
+/src_android/android/.gradle/
+/src_android/android/local.properties
+/src_android/android/capacitor.settings.gradle
+/src_android/android/app/capacitor.build.gradle
+/src_android/android/app/src/main/assets/
+/src_android/android/app/src/main/res/xml/config.xml
+/src_android/android/capacitor-cordova-android-plugins/
+**/build/
+*.jks
+*.keystore
+/dist_android/
